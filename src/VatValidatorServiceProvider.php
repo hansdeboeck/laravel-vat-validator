@@ -33,7 +33,7 @@ class VatValidatorServiceProvider extends ServiceProvider
             ], 'vat-validator-config');
         }
 
-        // Custom validation rule: 'vat' / 'vat:strict'.
+        // Custom validation rule: 'vat'.
         Validator::extend('vat', function (string $attribute, mixed $value): bool {
             if (! is_string($value) || $value === '') {
                 return false;

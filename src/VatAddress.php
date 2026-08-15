@@ -35,6 +35,35 @@ final class VatAddress implements ArrayAccess, JsonSerializable
         ];
     }
 
+    /**
+     * Verliesvrije vorm voor de cache. Sleutels staan 1:1 op de properties,
+     * los van de publieke toArray()-shape die om backwards-compat redenen
+     * snake_case gebruikt en niet mag wijzigen.
+     */
+    public function toCacheArray(): array
+    {
+        return [
+            'street' => $this->street,
+            'number' => $this->number,
+            'zipCode' => $this->zipCode,
+            'city' => $this->city,
+            'country' => $this->country,
+            'countryCode' => $this->countryCode,
+        ];
+    }
+
+    public static function fromCacheArray(array $data): self
+    {
+        return new self(
+            street: $data['street'] ?? null,
+            number: $data['number'] ?? null,
+            zipCode: $data['zipCode'] ?? null,
+            city: $data['city'] ?? null,
+            country: $data['country'] ?? null,
+            countryCode: $data['countryCode'] ?? null,
+        );
+    }
+
     public function jsonSerialize(): array
     {
         return $this->toArray();

@@ -38,6 +38,13 @@ class VatValidator
 
         if (! empty($this->config['cache_enabled'] ?? true)) {
             $cached = $this->cache->get($cacheKey);
+
+            if (is_array($cached) && $hit = VatLookupResult::fromCacheArray($cached)) {
+                return $hit;
+            }
+
+            // Entry geschreven door een oudere versie van deze package, die
+            // het resultaat nog als object cachete. Verloopt vanzelf.
             if ($cached instanceof VatLookupResult) {
                 return $cached;
             }
@@ -46,7 +53,7 @@ class VatValidator
         $result = $this->resolve($vat);
 
         if ($result->valid && ! empty($this->config['cache_enabled'] ?? true)) {
-            $this->cache->put($cacheKey, $result, $this->config['cache_ttl'] ?? 86400);
+            $this->cache->put($cacheKey, $result->toCacheArray(), $this->config['cache_ttl'] ?? 86400);
         }
 
         return $result;
@@ -127,6 +134,10 @@ class VatValidator
             return null;
         }
 
+        if (! $response->ok()) {
+            return null;
+        }
+
         $data = $response->json();
         if (! is_array($data) || empty($data['valid'])) {
             return null;
@@ -157,6 +168,10 @@ class VatValidator
                 ->get(sprintf(self::FALLBACK_BOB_URL, $vat));
         } catch (Throwable $e) {
             Log::warning('btw-opzoeken lookup failed', ['vat' => $vat, 'error' => $e->getMessage()]);
+            return null;
+        }
+
+        if (! $response->ok()) {
             return null;
         }
 

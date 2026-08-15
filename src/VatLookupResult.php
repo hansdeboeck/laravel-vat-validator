@@ -17,6 +17,12 @@ use JsonSerializable;
  */
 final class VatLookupResult implements ArrayAccess, JsonSerializable
 {
+    /**
+     * Verhoog dit zodra de properties wijzigen; bestaande cache-entries
+     * worden dan automatisch genegeerd.
+     */
+    private const CACHE_VERSION = 1;
+
     public function __construct(
         public readonly bool $valid,
         public readonly ?string $vatNumber = null,
@@ -53,6 +59,52 @@ final class VatLookupResult implements ArrayAccess, JsonSerializable
         }
 
         return $out;
+    }
+
+    /**
+     * Verliesvrije vorm voor de cache. Bewust los van toArray(): die is
+     * publiek, snake_case en lossy (laat countryCode weg bij een geldig
+     * resultaat) en mag om backwards-compat redenen niet wijzigen.
+     *
+     * Er gaat een objectvorm de cache in noch uit: Laravel 13 zet
+     * `serializable_classes` standaard op false, waardoor geserialiseerde
+     * objecten er niet meer uit komen.
+     */
+    public function toCacheArray(): array
+    {
+        return [
+            'v' => self::CACHE_VERSION,
+            'valid' => $this->valid,
+            'vatNumber' => $this->vatNumber,
+            'name' => $this->name,
+            'countryCode' => $this->countryCode,
+            'address' => $this->address?->toCacheArray(),
+            'source' => $this->source,
+            'error' => $this->error,
+        ];
+    }
+
+    /**
+     * Geeft null bij een entry uit een andere versie van deze klasse, zodat
+     * oude cache-entries genegeerd worden in plaats van half gehydrateerd.
+     */
+    public static function fromCacheArray(array $data): ?self
+    {
+        if (($data['v'] ?? null) !== self::CACHE_VERSION) {
+            return null;
+        }
+
+        $address = $data['address'] ?? null;
+
+        return new self(
+            valid: (bool) ($data['valid'] ?? false),
+            vatNumber: $data['vatNumber'] ?? null,
+            name: $data['name'] ?? null,
+            countryCode: $data['countryCode'] ?? null,
+            address: is_array($address) ? VatAddress::fromCacheArray($address) : null,
+            source: $data['source'] ?? null,
+            error: $data['error'] ?? null,
+        );
     }
 
     public function jsonSerialize(): array

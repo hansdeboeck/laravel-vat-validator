@@ -1,6 +1,6 @@
 {
     "name": "hansdeboeck/laravel-vat-validator",
-    "description": "EU VAT (BTW) validator for Laravel — VIES with automatic fallbacks (controleerbtwnummer.eu, btw-opzoeken.be), 24h cache, address parsing.",
+    "description": "EU VAT (BTW) validator for Laravel - VIES with automatic fallbacks (controleerbtwnummer.eu, btw-opzoeken.be), 24h cache, address parsing.",
     "type": "library",
     "license": "MIT",
     "keywords": ["laravel", "vat", "btw", "vies", "validator", "belgium"],
@@ -10,11 +10,17 @@
         }
     ],
     "require": {
-        "php": "^8.2",
-        "illuminate/http": "^11.0|^12.0|^13.0",
-        "illuminate/cache": "^11.0|^12.0|^13.0",
-        "illuminate/support": "^11.0|^12.0|^13.0",
-        "illuminate/contracts": "^11.0|^12.0|^13.0"
+        "php": "^8.3",
+        "guzzlehttp/guzzle": "^7.9",
+        "illuminate/cache": "^12.0|^13.0",
+        "illuminate/contracts": "^12.0|^13.0",
+        "illuminate/http": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^10.0|^11.0",
+        "pestphp/pest": "^4.0",
+        "pestphp/pest-plugin-laravel": "^4.0"
     },
     "autoload": {
         "psr-4": {
@@ -33,8 +39,14 @@
             ]
         }
     },
+    "scripts": {
+        "test": "vendor/bin/pest"
+    },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
     },
     "minimum-stability": "stable",
     "prefer-stable": true
