@@ -1,6 +1,6 @@
 # laravel-vat-validator
 
-EU BTW-nummer validatie voor Laravel. VIES als primaire bron met automatische fallbacks naar `controleerbtwnummer.eu` en `btw-opzoeken.be`. Cached, geretry'd, met adres-parsing.
+EU BTW-nummer validatie voor Laravel. VIES als primaire bron met automatische fallbacks naar `btwzoeken.be`, `controleerbtwnummer.eu` en `btw-opzoeken.be`. Cached, geretry'd, met adres-parsing.
 
 ## Requirements
 
@@ -83,16 +83,53 @@ $result['address']['city'];
 | `cache_prefix` | `vat:` | Wijzig om bestaande cache te invalideren |
 | `http_timeout` | 6s | Per HTTP-request, niet onder 5 |
 | `fallbacks_enabled` | true | Schakel niet-VIES bronnen uit |
+| `sources` | `['vies', 'btwzoeken', 'cbw', 'btwo']` | De volgorde waarin bronnen bevraagd worden |
+| `btwzoeken.base_url` | `https://btwzoeken.be/api/v1` | Leeg maken zet die bron uit |
+| `btwzoeken.key` | `null` | Optionele API-sleutel van btwzoeken.be |
 
-Override via env: `VAT_VALIDATOR_CACHE_TTL`, `VAT_VALIDATOR_FALLBACKS`, etc.
+Override via env: `VAT_VALIDATOR_CACHE_TTL`, `VAT_VALIDATOR_FALLBACKS`,
+`VAT_VALIDATOR_BTWZOEKEN_URL`, `VAT_VALIDATOR_BTWZOEKEN_KEY`, etc.
 
 ## Bronnen
 
 1. **VIES (EU)** — `https://ec.europa.eu/taxation_customs/vies/rest-api/...` — primaire bron, retried 2× met 200ms.
-2. **controleerbtwnummer.eu** — fallback voor alle EU-landen wanneer VIES geen antwoord geeft.
-3. **btw-opzoeken.be** — laatste redmiddel, alleen voor BE-nummers.
+2. **btwzoeken.be** — `https://btwzoeken.be/api/v1/companies/{nummer}` — de open data van de KBO als JSON.
+3. **controleerbtwnummer.eu** — fallback voor alle EU-landen wanneer VIES geen antwoord geeft.
+4. **btw-opzoeken.be** — laatste redmiddel, alleen voor BE-nummers.
+
+De volgorde ligt niet vast in de code maar in `sources`. De eerste bron die een geldig
+antwoord geeft, wint; wat erachter staat, wordt niet meer bevraagd. Een bron die wegvalt,
+een foutstatus geeft of begrensd wordt (429), telt als "weet het niet" — dan komt de
+volgende aan de beurt in plaats van dat de hele lookup faalt.
 
 Negatieve lookups worden niet gecached (zodat een net geactiveerd BTW-nummer niet 24u onbruikbaar blijft).
+
+### btwzoeken.be
+
+Deze bron geeft meer terug dan VIES: naam, adres in aparte velden, en achter dezelfde API
+ook de rechtsvorm, de activiteiten en de vestigingen. Voor Belgische nummers is dat het
+verschil tussen "bestaat dit" en "wie is dit".
+
+Let op wat `valid` hier betekent. VIES zegt of een nummer VANDAAG geldig is voor
+intracommunautaire handel; btwzoeken.be zegt of de onderneming in de KBO **actief** staat.
+Een stopgezette onderneming komt dus als ongeldig terug en niet als onbekend — wie een
+factuur nakijkt van een bedrijf dat vorig jaar ophield, hoort geen groen vinkje te krijgen.
+Wie de officiële EU-bevestiging nodig heeft, houdt `vies` vooraan in `sources`.
+
+Een sleutel is optioneel:
+
+```dotenv
+VAT_VALIDATOR_BTWZOEKEN_KEY=btwz_...
+```
+
+Zonder sleutel geldt de publieke begrenzing van btwzoeken.be (5 verzoeken per minuut en
+20 per uur per IP-adres); met een sleutel 100 per uur. Een sleutel maak je aan op
+`btwzoeken.be/api/sleutels`. De cache in deze package telt daarin mee: een nummer dat
+vandaag al opgezocht is, kost geen tweede verzoek.
+
+**Draait deze package IN btwzoeken.be zelf**, dan hoort `btwzoeken` uit `sources` te gaan
+(of `VAT_VALIDATOR_BTWZOEKEN_URL` leeg te staan). De API daar valt voor een onbekend nummer
+terug op deze validator, en een validator die die API bevraagt, is een lus.
 
 ## Cache-formaat
 
