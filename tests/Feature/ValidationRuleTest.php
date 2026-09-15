@@ -18,6 +18,7 @@ it('laat de vat-regel slagen voor een geldig nummer', function () {
 it('laat de vat-regel falen voor een onbekend nummer', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(['isValid' => false]),
+        'btwzoeken.be/*' => Http::response([], 404),
         'controleerbtwnummer.eu/*' => Http::response(['valid' => false]),
         'www.btw-opzoeken.be/*' => Http::response([]),
     ]);

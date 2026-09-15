@@ -25,6 +25,7 @@ it('gebruikt VIES als primaire bron', function () {
 it('valt terug op controleerbtwnummer.eu wanneer VIES isValid false geeft', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(['isValid' => false]),
+        'btwzoeken.be/*' => Http::response([], 404),
         'controleerbtwnummer.eu/*' => Http::response([
             'valid' => true,
             'name' => 'Fallback NV',
@@ -49,6 +50,7 @@ it('valt terug op controleerbtwnummer.eu wanneer VIES isValid false geeft', func
 it('valt terug op btw-opzoeken.be, maar alleen voor BE', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(['isValid' => false]),
+        'btwzoeken.be/*' => Http::response([], 404),
         'controleerbtwnummer.eu/*' => Http::response(['valid' => false]),
         'www.btw-opzoeken.be/*' => Http::response([[
             'VAT' => 'BE0123456789',
@@ -72,6 +74,7 @@ it('valt terug op btw-opzoeken.be, maar alleen voor BE', function () {
 it('slaat btw-opzoeken.be over voor niet-Belgische nummers', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(['isValid' => false]),
+        'btwzoeken.be/*' => Http::response([], 404),
         'controleerbtwnummer.eu/*' => Http::response(['valid' => false]),
         'www.btw-opzoeken.be/*' => Http::response([]),
     ]);
@@ -100,6 +103,7 @@ it('slaat alle fallbacks over wanneer fallbacks_enabled false is', function () {
 it('negeert een fallback die een foutstatus teruggeeft', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(['isValid' => false]),
+        'btwzoeken.be/*' => Http::response(btwzoekenValidResponse(), 429),
         'controleerbtwnummer.eu/*' => Http::response(['valid' => true, 'name' => 'Foutpagina'], 500),
         'www.btw-opzoeken.be/*' => Http::response([], 503),
     ]);
@@ -113,6 +117,7 @@ it('negeert een fallback die een foutstatus teruggeeft', function () {
 it('negeert VIES wanneer die een foutstatus teruggeeft', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(viesValidResponse(), 503),
+        'btwzoeken.be/*' => Http::response([], 404),
         'controleerbtwnummer.eu/*' => Http::response(['valid' => true, 'name' => 'Fallback NV']),
     ]);
 

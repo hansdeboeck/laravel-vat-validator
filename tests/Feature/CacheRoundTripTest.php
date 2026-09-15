@@ -140,6 +140,7 @@ it('overleeft serializable_classes op een store die wel serialiseert', function 
 it('cachet ongeldige resultaten niet', function () {
     Http::fake([
         'ec.europa.eu/*' => Http::response(['isValid' => false]),
+        'btwzoeken.be/*' => Http::response([], 404),
         'controleerbtwnummer.eu/*' => Http::response(['valid' => false]),
         'www.btw-opzoeken.be/*' => Http::response([]),
     ]);

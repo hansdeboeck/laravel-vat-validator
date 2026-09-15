@@ -10,16 +10,32 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * EU VAT (BTW) lookup met VIES als primaire bron en twee fallbacks.
+ * EU VAT (BTW) lookup met VIES als primaire bron en drie fallbacks.
  *
  * Origineel ontleend aan App\Services\Btw\BtwService van Opnieuw — hier
  * geëxtraheerd zodat meerdere projecten dezelfde validator gebruiken.
+ *
+ * De bronnen en hun volgorde staan in config/vat-validator.php; daar staat ook
+ * waarom de beste bron per project verschilt.
  */
 class VatValidator
 {
     private const VIES_URL = 'https://ec.europa.eu/taxation_customs/vies/rest-api/ms/%s/vat/%s';
     private const FALLBACK_EU_URL = 'https://controleerbtwnummer.eu/api/validate/%s.json';
     private const FALLBACK_BOB_URL = 'https://www.btw-opzoeken.be/VATSearch/Search?KeyWord=%s&currentSite=www.btw-opzoeken.be';
+    private const BTWZOEKEN_BASE = 'https://btwzoeken.be/api/v1';
+
+    /**
+     * De bronvolgorde wanneer de config er geen opgeeft.
+     *
+     * Dezelfde lijst als in config/vat-validator.php, en die staat hier een
+     * tweede keer omdat een app die de config niet publiceerde -- of een
+     * validator die met een lege array opgebouwd wordt, zoals in een test --
+     * anders geen enkele bron zou bevragen.
+     *
+     * @var list<string>
+     */
+    private const DEFAULT_SOURCES = ['vies', 'btwzoeken', 'cbw', 'btwo'];
 
     public function __construct(
         private readonly CacheRepository $cache,
@@ -59,22 +75,45 @@ class VatValidator
         return $result;
     }
 
+    /**
+     * De bronnen aflopen tot er een antwoordt.
+     *
+     * DE VOLGORDE KOMT UIT DE CONFIG en staat niet meer hier vast. Er zijn er
+     * vier, en welke de beste is, hangt af van wat de app ermee doet: wie
+     * Belgische nummers nakijkt heeft aan btwzoeken.be het rijkste antwoord,
+     * wie een intracommunautaire factuur moet verantwoorden heeft VIES nodig.
+     * Zie config/vat-validator.php voor de afweging.
+     *
+     * Een onbekende naam in die lijst wordt overgeslagen en niet gemeld als
+     * fout: een typefout in de config hoort geen lookup te laten falen die
+     * verder gewoon kan doorgaan.
+     */
     private function resolve(string $vat): VatLookupResult
     {
         $country = substr($vat, 0, 2);
         $number = substr($vat, 2);
 
-        if ($vies = $this->viaVies($country, $number, $vat)) {
-            return $vies;
-        }
+        $sources = $this->config['sources'] ?? self::DEFAULT_SOURCES;
+        $fallbacks = (bool) ($this->config['fallbacks_enabled'] ?? true);
 
-        if (($this->config['fallbacks_enabled'] ?? true)) {
-            if ($eu = $this->viaControleerBtwNummer($vat, $country)) {
-                return $eu;
+        foreach ($sources as $source) {
+            // Alles behalve VIES is een fallback. Staan die uit, dan blijft
+            // alleen VIES over -- ook als de lijst hierboven anders zegt.
+            if (! $fallbacks && $source !== 'vies') {
+                continue;
             }
 
-            if ($country === 'BE' && $bob = $this->viaBtwOpzoeken($vat, $country)) {
-                return $bob;
+            $result = match ($source) {
+                'vies' => $this->viaVies($country, $number, $vat),
+                'btwzoeken' => $this->viaBtwzoeken($vat, $country),
+                'cbw' => $this->viaControleerBtwNummer($vat, $country),
+                // btw-opzoeken.be kent alleen Belgische nummers.
+                'btwo' => $country === 'BE' ? $this->viaBtwOpzoeken($vat, $country) : null,
+                default => null,
+            };
+
+            if ($result !== null) {
+                return $result;
             }
         }
 
@@ -120,6 +159,83 @@ class VatValidator
                 countryCode: $country,
             ),
             source: 'vies',
+        );
+    }
+
+    /**
+     * btwzoeken.be — de open data van de KBO, als JSON.
+     *
+     * WAAROM DEZE BRON ERBIJ HOORT. VIES antwoordt met een naam en een adres in
+     * één tekstblok dat per lidstaat anders geschreven is; deze bron geeft de
+     * velden apart terug, mét de rechtsvorm en de hoedanigheden erbij. Voor een
+     * Belgisch nummer is dat het verschil tussen "bestaat dit" en "wie is dit".
+     *
+     * WAT `valid` HIER BETEKENT, en dat wijkt af van de andere bronnen. VIES
+     * zegt of een nummer VANDAAG geldig is voor intracommunautaire handel;
+     * deze bron zegt of de onderneming in de KBO actief staat. Een stopgezette
+     * onderneming staat er dus nog in, en komt hier als ongeldig terug — niet
+     * als "onbekend". Dat is bewust: wie een factuur nakijkt van een bedrijf
+     * dat vorig jaar ophield, hoort geen groen vinkje te krijgen.
+     *
+     * DE SLEUTEL IS OPTIONEEL. Zonder sleutel geldt de publieke begrenzing van
+     * btwzoeken.be en komt er bij te snel bevragen een 429 terug; die wordt
+     * hier behandeld als "deze bron weet het niet", zodat de volgende bron aan
+     * de beurt komt in plaats van dat de hele lookup faalt.
+     */
+    private function viaBtwzoeken(string $vat, string $country): ?VatLookupResult
+    {
+        $base = rtrim((string) ($this->config['btwzoeken']['base_url'] ?? self::BTWZOEKEN_BASE), '/');
+
+        // Een lege base_url is hoe een app deze bron uitzet zonder de hele
+        // `sources`-lijst te moeten overschrijven.
+        if ($base === '') {
+            return null;
+        }
+
+        $key = $this->config['btwzoeken']['key'] ?? null;
+
+        try {
+            $request = Http::timeout($this->config['http_timeout'] ?? 6)->acceptJson();
+
+            if (is_string($key) && $key !== '') {
+                $request = $request->withToken($key);
+            }
+
+            $response = $request->get($base . '/companies/' . urlencode($vat));
+        } catch (Throwable $e) {
+            Log::warning('btwzoeken lookup failed', ['vat' => $vat, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+
+        if (! $response->ok()) {
+            return null;
+        }
+
+        $data = $response->json('data');
+
+        if (! is_array($data) || empty($data['active'])) {
+            return null;
+        }
+
+        // De API geeft alle adressen terug; het eerste is de maatschappelijke
+        // zetel. Deze package draagt er één, net als bij de andere bronnen.
+        $address = is_array($data['addresses'] ?? null) ? ($data['addresses'][0] ?? null) : null;
+
+        return new VatLookupResult(
+            valid: true,
+            vatNumber: $data['vat'] ?? $vat,
+            name: $this->cleanText($data['name'] ?? null),
+            countryCode: $country,
+            address: is_array($address) ? new VatAddress(
+                street: $address['street'] ?? null,
+                number: $this->joinNumberAndBox($address['number'] ?? null, $address['box'] ?? null),
+                zipCode: $address['postal_code'] ?? null,
+                city: $address['city'] ?? null,
+                country: $this->countryNameFromCode($address['country'] ?? $country),
+                countryCode: $address['country'] ?? $country,
+            ) : null,
+            source: 'btwzoeken',
         );
     }
 
@@ -246,6 +362,22 @@ class VatValidator
             return [trim($m[1]), trim($m[2])];
         }
         return [trim($line), null];
+    }
+
+    /**
+     * Huisnummer en busnummer als één veld, zoals VatAddress ze draagt.
+     *
+     * De KBO houdt ze apart; deze package heeft één `number`. Een bus die
+     * verloren gaat, is een pakket dat bij de buren ligt.
+     */
+    private function joinNumberAndBox(?string $number, ?string $box): ?string
+    {
+        $number = trim((string) $number);
+        $box = trim((string) $box);
+
+        $joined = trim($number . ($box !== '' ? ' bus ' . $box : ''));
+
+        return $joined === '' ? null : $joined;
     }
 
     private function normalize(string $vat): string
