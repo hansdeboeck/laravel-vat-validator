@@ -52,6 +52,37 @@ if ($result->valid) {
 }
 ```
 
+### Ongeldig of onbereikbaar
+
+Antwoordt geen enkele bron (VIES ligt eruit, de fallbacks ook), dan is het resultaat niet
+"ongeldig" maar "onbereikbaar". `valid` blijft `false`, zodat code die alleen daarnaar kijkt
+zo'n nummer niet doorlaat; `unavailable` maakt het verschil:
+
+```php
+$result = app(VatValidator::class)->lookup('BE0405622220');
+
+if ($result->unavailable) {
+    // straks opnieuw proberen, de klant niet weigeren
+}
+```
+
+`toArray()` draagt dan `'unavailable' => true`. Onbereikbare resultaten worden niet gecached.
+
+### Formaat en controlegetal
+
+Zonder een bron te bevragen:
+
+```php
+use HansDeBoeck\VatValidator\VatFormat;
+
+VatFormat::check('BE 0403.170.701');
+// ['vatNumber' => 'BE0403170701', 'countryCode' => 'BE', 'validFormat' => true,
+//  'checksum' => true, 'error' => null]
+```
+
+Het formaat volgt de patronen van VIES voor alle lidstaten en XI. Het controlegetal wordt
+nagerekend voor BE en NL; voor de andere landen is `checksum` `null`.
+
 ### Validation rule
 
 ```php

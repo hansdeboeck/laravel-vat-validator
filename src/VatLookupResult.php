@@ -31,11 +31,34 @@ final class VatLookupResult implements ArrayAccess, JsonSerializable
         public readonly ?VatAddress $address = null,
         public readonly ?string $source = null,
         public readonly ?string $error = null,
+        public readonly bool $unavailable = false,
     ) {}
 
     public static function invalid(string $error, ?string $vatNumber = null): self
     {
         return new self(valid: false, vatNumber: $vatNumber, error: $error);
+    }
+
+    /**
+     * Geen enkele bron gaf een antwoord: VIES lag eruit, de fallbacks ook.
+     *
+     * DIT IS GEEN ONGELDIG NUMMER, en dat onderscheid is de reden van bestaan
+     * van deze methode. Wie "ongeldig" leest, weigert de klant; wie
+     * "onbereikbaar" leest, probeert het straks opnieuw. Vroeger kwamen beide
+     * als 'Invalid VAT number' terug, en dan werd een bestaand bedrijf
+     * afgewezen omdat een lidstaat even niet antwoordde.
+     *
+     * `valid` blijft false: wie alleen naar `valid` kijkt, laat zo'n nummer
+     * niet door. Wie het verschil wil maken, kijkt naar `unavailable`.
+     */
+    public static function unavailable(?string $vatNumber = null): self
+    {
+        return new self(
+            valid: false,
+            vatNumber: $vatNumber,
+            error: 'VAT service unavailable',
+            unavailable: true,
+        );
     }
 
     public function toArray(): array
@@ -55,6 +78,11 @@ final class VatLookupResult implements ArrayAccess, JsonSerializable
             }
             if ($this->error !== null) {
                 $out['error'] = $this->error;
+            }
+            // Alleen wanneer het zo is: zo blijft de vorm voor een gewoon
+            // ongeldig nummer precies wat hij was.
+            if ($this->unavailable) {
+                $out['unavailable'] = true;
             }
         }
 
