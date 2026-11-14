@@ -87,6 +87,13 @@ class VatValidator
      * Een onbekende naam in die lijst wordt overgeslagen en niet gemeld als
      * fout: een typefout in de config hoort geen lookup te laten falen die
      * verder gewoon kan doorgaan.
+     *
+     * DRIE UITKOMSTEN PER BRON, en niet twee. Een bron geeft een resultaat
+     * (geldig, de eerste wint), false (ze heeft geantwoord en het nummer is
+     * niet geldig) of null (ze heeft niet geantwoord: time-out, foutstatus,
+     * een lidstaat die eruit ligt). Zei geen enkele bron "ongeldig", dan weten
+     * we het niet, en dan komt er 'onbereikbaar' terug in plaats van een
+     * afwijzing die nergens op steunt.
      */
     private function resolve(string $vat): VatLookupResult
     {
@@ -95,6 +102,8 @@ class VatValidator
 
         $sources = $this->config['sources'] ?? self::DEFAULT_SOURCES;
         $fallbacks = (bool) ($this->config['fallbacks_enabled'] ?? true);
+
+        $beantwoord = false;
 
         foreach ($sources as $source) {
             // Alles behalve VIES is een fallback. Staan die uit, dan blijft
@@ -112,15 +121,31 @@ class VatValidator
                 default => null,
             };
 
-            if ($result !== null) {
+            if ($result instanceof VatLookupResult) {
                 return $result;
+            }
+
+            if ($result === false) {
+                $beantwoord = true;
             }
         }
 
-        return VatLookupResult::invalid('Invalid VAT number', $vat);
+        return $beantwoord
+            ? VatLookupResult::invalid('Invalid VAT number', $vat)
+            : VatLookupResult::unavailable($vat);
     }
 
-    private function viaVies(string $country, string $number, string $vat): ?VatLookupResult
+    /**
+     * De foutcodes van VIES die wel een uitspraak over het nummer zijn.
+     *
+     * VIES zet isValid ook op false wanneer de lidstaat niet antwoordt
+     * (MS_UNAVAILABLE, TIMEOUT, MS_MAX_CONCURRENT_REQ, ...). Alleen deze codes
+     * betekenen "nagekeken en niet geldig". Een antwoord zonder userError
+     * telt ook als uitspraak: zo antwoordden oudere versies van de API.
+     */
+    private const VIES_INVALID = ['INVALID', 'INVALID_INPUT'];
+
+    private function viaVies(string $country, string $number, string $vat): VatLookupResult|false|null
     {
         try {
             $response = Http::timeout($this->config['http_timeout'] ?? 6)
@@ -137,8 +162,14 @@ class VatValidator
         }
 
         $data = $response->json();
-        if (! is_array($data) || empty($data['isValid'])) {
+        if (! is_array($data)) {
             return null;
+        }
+
+        if (empty($data['isValid'])) {
+            $userError = $data['userError'] ?? null;
+
+            return ($userError === null || in_array($userError, self::VIES_INVALID, true)) ? false : null;
         }
 
         [$street, $streetNumber, $zip, $city] = $this->parseViesAddress(
@@ -182,7 +213,7 @@ class VatValidator
      * hier behandeld als "deze bron weet het niet", zodat de volgende bron aan
      * de beurt komt in plaats van dat de hele lookup faalt.
      */
-    private function viaBtwzoeken(string $vat, string $country): ?VatLookupResult
+    private function viaBtwzoeken(string $vat, string $country): VatLookupResult|false|null
     {
         $base = rtrim((string) ($this->config['btwzoeken']['base_url'] ?? self::BTWZOEKEN_BASE), '/');
 
@@ -208,14 +239,24 @@ class VatValidator
             return null;
         }
 
+        // Een 404 is een antwoord: niet in de KBO. Een 429 of 5xx is er geen.
+        if ($response->status() === 404) {
+            return false;
+        }
+
         if (! $response->ok()) {
             return null;
         }
 
         $data = $response->json('data');
 
-        if (! is_array($data) || empty($data['active'])) {
+        if (! is_array($data)) {
             return null;
+        }
+
+        // Stopgezet: de onderneming bestaat, het nummer is niet meer geldig.
+        if (empty($data['active'])) {
+            return false;
         }
 
         // De API geeft alle adressen terug; het eerste is de maatschappelijke
@@ -239,7 +280,7 @@ class VatValidator
         );
     }
 
-    private function viaControleerBtwNummer(string $vat, string $country): ?VatLookupResult
+    private function viaControleerBtwNummer(string $vat, string $country): VatLookupResult|false|null
     {
         try {
             $response = Http::timeout($this->config['http_timeout'] ?? 6)
@@ -255,8 +296,12 @@ class VatValidator
         }
 
         $data = $response->json();
-        if (! is_array($data) || empty($data['valid'])) {
+        if (! is_array($data)) {
             return null;
+        }
+
+        if (empty($data['valid'])) {
+            return false;
         }
 
         return new VatLookupResult(
@@ -276,7 +321,7 @@ class VatValidator
         );
     }
 
-    private function viaBtwOpzoeken(string $vat, string $country): ?VatLookupResult
+    private function viaBtwOpzoeken(string $vat, string $country): VatLookupResult|false|null
     {
         try {
             $response = Http::timeout($this->config['http_timeout'] ?? 6)
@@ -292,7 +337,16 @@ class VatValidator
         }
 
         $data = $response->json();
-        if (! is_array($data) || count($data) !== 1) {
+        if (! is_array($data)) {
+            return null;
+        }
+
+        // Geen treffer is een antwoord; meer dan een treffer is er geen.
+        if ($data === []) {
+            return false;
+        }
+
+        if (count($data) !== 1) {
             return null;
         }
 
@@ -382,13 +436,7 @@ class VatValidator
 
     private function normalize(string $vat): string
     {
-        $vat = strtoupper(preg_replace('/[\s.\-]/', '', $vat));
-
-        if (preg_match('/^\d{9,10}$/', $vat)) {
-            $vat = 'BE' . str_pad($vat, 10, '0', STR_PAD_LEFT);
-        }
-
-        return $vat;
+        return VatFormat::normalize($vat);
     }
 
     private function cleanText(?string $value): ?string
